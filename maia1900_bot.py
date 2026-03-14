@@ -3,137 +3,168 @@ from chess_player import ChessPlayer
 import subprocess
 import time
 import os
+import sys
 import shutil
 
 class Maia1900Bot(ChessPlayer):
     """
-    Chess bot that uses Maia-1900 (via lc0 binary + maia-1900.pb.gz network).
-    Plays human-like chess at roughly 1900 Lichess level.
-    
-    Requirements (do once):
-    1. Download lc0 binary for your platform:
-       https://github.com/LeelaChessZero/lc0/releases (e.g. lc0-v0.30.0-windows-cpu-avx2.exe or lc0)
-    2. Rename/copy it to 'lc0' / 'lc0.exe' in this directory (or add to PATH)
-    3. Download Maia-1900 network:
-       https://github.com/CSSLab/maia-chess/releases/download/v1.0/maia-1900.pb.gz
-       Place it in the same folder as this file (or adjust NETWORK_PATH below)
+    Maia-1900 via Nix-packaged lc0 (nixpkgs#lc0).
+    No explicit backend (uses lc0 default that worked in manual test).
     """
-    
-    def __init__(self):
-        self.engine = None
-        self._start_engine()
-    
-    def _start_engine(self):
-        """Launch lc0 with Maia-1900 net (only once)."""
-        lc0_path = "./lc0"          # adjust if needed → "lc0.exe" on Windows
-        network_path = "./maia-1900.pb.gz"  # or "./networks/maia-1900.pb.gz"
-        
-        if not os.path.isfile(lc0_path):
-            raise FileNotFoundError(
-                f"lc0 binary not found at {lc0_path}. "
-                "Download from https://github.com/LeelaChessZero/lc0/releases "
-                "and place it here (rename to lc0 or lc0.exe)."
-            )
-        
-        if not os.path.isfile(network_path):
-            raise FileNotFoundError(
-                f"Maia-1900 network not found at {network_path}. "
-                "Download from https://github.com/CSSLab/maia-chess/releases/download/v1.0/maia-1900.pb.gz"
-            )
-        
-        # Start lc0 process
-        self.engine = subprocess.Popen(
-            [
-                lc0_path,
-                "--weights=" + network_path,
-                "--backend=cpu",               # change to cuda/opencl if you have GPU
-                "--nncache_size=1000000",      # helps performance
-                "--max-prefetch=8",
-                "--threads=4",                 # adjust to your CPU cores
-                "--move-time=5000",            # think ~5 seconds per move (adjust for strength/speed)
-                "--logfile=maia1900.log"       # optional debug log
-            ],
-            stdin=subprocess.PIPE,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            bufsize=1,
-            universal_newlines=True
+
+    def __init__(self, *args, **kwargs):
+        # Accept any extra args/kwargs from SecureBotWrapper / framework
+        super().__init__(*args, **kwargs)
+        self._engine = None
+        self._started = False
+        self.lc0_path = self._find_lc0()
+
+    def _find_lc0(self):
+        candidates = [
+            shutil.which("lc0"),
+            "/run/current-system/sw/bin/lc0",
+        ]
+        for cand in [c for c in candidates if c]:
+            if os.path.isfile(cand) and os.access(cand, os.X_OK):
+                print(f"[Maia-1900] Found lc0 at: {cand}", file=sys.stderr)
+                return cand
+
+        raise FileNotFoundError(
+            "[Maia-1900] Could not find 'lc0' executable.\n"
+            "Make sure you run with: nix shell nixpkgs#lc0 --command python main.py\n"
+            "or have lc0 in your PATH."
         )
-        
-        # Wait for lc0 to initialize
-        time.sleep(2)
-        
-        # Basic readiness check
-        self._write("uci")
-        response = self._read_until("uciok")
-        if "uciok" not in response:
-            raise RuntimeError("lc0 did not respond to UCI → check binary/network.")
-    
-    def _write(self, line):
-        if self.engine:
-            self.engine.stdin.write(line + "\n")
-            self.engine.stdin.flush()
-    
-    def _read_line(self):
-        if self.engine:
-            return self.engine.stdout.readline().strip()
-        return ""
-    
-    def _read_until(self, keyword):
-        lines = []
-        while True:
-            line = self._read_line()
-            lines.append(line)
-            if keyword in line or not line:
-                break
-        return "\n".join(lines)
-    
-    def make_move(self, board: chess.Board):
-        """
-        Main method required by ChessPlayer.
-        Returns the chosen move (chess.Move) or None.
-        """
-        if board.is_game_over():
-            return None
-        
-        # Reset engine state
-        self._write("ucinewgame")
-        self._write(f"position fen {board.fen()}")
-        
-        # Ask for best move with fixed thinking time
-        # (you can change wtime/btime for real time control if desired)
-        self._write("go movetime 5000")   # 5 seconds thinking time — adjust this!
-        
-        # Read output until bestmove
-        response = self._read_until("bestmove")
-        
-        # Parse bestmove line
-        for line in response.split("\n"):
-            if line.startswith("bestmove"):
-                parts = line.split()
-                if len(parts) >= 2:
-                    move_str = parts[1]
-                    try:
-                        move = chess.Move.from_uci(move_str)
-                        if move in board.legal_moves:
-                            return move
-                    except:
-                        pass
-        
-        # Fallback: if something fails, return a random legal move
-        legal_moves = list(board.legal_moves)
-        if legal_moves:
-            return legal_moves[0]  # or random.choice(legal_moves)
-        
-        return None
-    
-    def __del__(self):
-        """Cleanup engine process on object deletion."""
-        if self.engine:
+
+    def _ensure_engine(self):
+        if self._started:
+            return True
+
+        weights = os.path.abspath("./maia-1900.pb.gz")
+
+        if not os.path.isfile(weights):
+            print(f"[Maia-1900] Missing weights file: {weights}", file=sys.stderr)
+            return False
+
+        try:
+            cmd = [
+                self.lc0_path,
+                f"--weights={weights}",
+                "--threads=1",
+                "--nncache_size=200000",
+                "--move-time=40000",
+                "--logfile=maia_lc0.log"
+            ]
+
+            print(f"[Maia-1900] Launching lc0: {' '.join(cmd)}", file=sys.stderr)
+
+            self._engine = subprocess.Popen(
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,   # merge errors into stdout
+                text=True,
+                bufsize=1,
+                universal_newlines=True,
+                cwd=os.getcwd()
+            )
+
+            time.sleep(3.0)  # Give time for weights loading
+
+            self._write("uci")
+            resp = self._read_until("uciok", max_lines=200)
+
+            print(f"[Maia-1900] Raw lc0 response after 'uci':\n{resp}\n", file=sys.stderr)
+
+            if "uciok" not in resp.lower():
+                # Try to read more output
+                extra = ""
+                for _ in range(15):
+                    line = self._read_line()
+                    if line:
+                        extra += line + "\n"
+                if extra:
+                    print(f"[Maia-1900] Additional output:\n{extra}", file=sys.stderr)
+                raise RuntimeError("Did not receive 'uciok' from lc0")
+
+            self._started = True
+            print("[Maia-1900] Engine initialized successfully!", file=sys.stderr)
+            return True
+
+        except Exception as e:
+            print(f"[Maia-1900] Engine startup failed: {str(e)}", file=sys.stderr)
+            self._kill_engine()
+            return False
+
+    def _write(self, text):
+        if self._engine and self._engine.poll() is None:
             try:
-                self._write("quit")
-                self.engine.terminate()
-                self.engine.wait(timeout=3)
+                self._engine.stdin.write(text + "\n")
+                self._engine.stdin.flush()
             except:
                 pass
+
+    def _read_line(self):
+        if self._engine and self._engine.poll() is None:
+            try:
+                return self._engine.stdout.readline().rstrip()
+            except:
+                return ""
+        return ""
+
+    def _read_until(self, keyword, max_lines=200):
+        lines = []
+        for _ in range(max_lines):
+            line = self._read_line()
+            if line:
+                lines.append(line)
+            if keyword.lower() in line.lower():
+                break
+            time.sleep(0.02)
+        return "\n".join(lines)
+
+    def _kill_engine(self):
+        if self._engine:
+            try:
+                self._write("quit")
+                self._engine.terminate()
+                self._engine.wait(4.0)
+            except:
+                pass
+            self._engine = None
+        self._started = False
+
+    def make_move(self, board: chess.Board):
+        if board.is_game_over():
+            return None
+
+        if not self._ensure_engine():
+            print("[Maia-1900] Engine not available → random fallback move", file=sys.stderr)
+            moves = list(board.legal_moves)
+            return moves[0] if moves else None
+
+        try:
+            self._write("ucinewgame")
+            time.sleep(0.1)
+            self._write(f"position fen {board.fen()}")
+            self._write("go movetime 4000")
+
+            output = self._read_until("bestmove", max_lines=300)
+
+            for line in output.splitlines():
+                if line.startswith("bestmove"):
+                    parts = line.split()
+                    if len(parts) > 1:
+                        uci = parts[1]
+                        try:
+                            move = chess.Move.from_uci(uci)
+                            if move in board.legal_moves:
+                                return move
+                        except ValueError:
+                            pass
+
+        except Exception as e:
+            print(f"[Maia-1900] Error during make_move: {str(e)}", file=sys.stderr)
+
+        # Fallback
+        moves = list(board.legal_moves)
+        return moves[0] if moves else None

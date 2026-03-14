@@ -3,13 +3,14 @@ import multiprocessing
 from chess_ui import ChessUI
 # Make sure to import SmartBot from bots.py
 from bots import RandomBot, PacifistBot, HumanPlayer, FreezerBot, CrasherBot, SmartBot
+from maia1900_bot import Maia1900Bot
 from secure_bot import SecureBotWrapper
 
 if __name__ == "__main__":
     multiprocessing.freeze_support()
     
     print("--- CHESS TOURNAMENT MODE ---")
-    print("1. Bot vs Bot (Pacifist vs SmartBot)")
+    print("1. Bot vs Bot (MaiaBot-1900 vs SmartBot)")
     print("2. Human vs Bot (You vs SmartBot)")
     print("3. Human vs Human")
     
@@ -26,7 +27,7 @@ if __name__ == "__main__":
         
     else:
         # Default: Watch two bots fight
-        player1 = SecureBotWrapper(PacifistBot, "Pacifist Bot")
+        player1 = SecureBotWrapper(Maia1900Bot, "MaiaBot-1900")
         player2 = SecureBotWrapper(SmartBot, "Gemini SmartBot")
 
     # Launch the game
