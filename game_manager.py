@@ -25,7 +25,7 @@ class GameManager:
         # Async State
         self.pending_move_bot = None  # The bot currently thinking
         self.pending_move_start_time = 0
-        self.bot_move_timeout = 5.0   # HARD LIMIT: Kill bot if it takes > 5s per move
+        self.bot_move_timeout = 300.0   # HARD LIMIT: Kill bot if it takes > 5s per move
         
         self.game_over_reason = ""
         self.time_history = []

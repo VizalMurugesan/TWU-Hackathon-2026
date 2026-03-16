@@ -8,8 +8,8 @@ SQ_SIZE = BOARD_HEIGHT // DIMENSION
 FPS = 60
 
 # Time control
-GAME_TIME_LIMIT = 600.0  
-INCREMENT_SEC = 5.0      
+GAME_TIME_LIMIT = 180.0  
+INCREMENT_SEC = 2.0      
 
 # Visuals
 LIGHT_SQ = (240, 217, 181) 
